@@ -137,6 +137,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Developer: Ebube\nTelegram: @yourusername")
 
+async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data['mode'] = 'mode_utme_only'
+    context.user_data['step'] = 'ask_utme'
+    await update.message.reply_text("Enter your UTME score (0–400):")
+
 async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     ensure_user(user.id)
@@ -288,6 +294,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("developer", developer))
     app.add_handler(CommandHandler("refer", refer))
+    app.add_handler(CommandHandler("calculate", calculate_command))
     app.add_handler(CommandHandler("broadcast", broadcast))
     app.add_handler(CallbackQueryHandler(mode_choice_handler, pattern="^mode_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
