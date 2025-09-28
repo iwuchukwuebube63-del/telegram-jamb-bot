@@ -4,7 +4,7 @@ import json
 import logging
 import threading
 from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
@@ -96,8 +96,7 @@ def calculate_aggregate_with_postutme(utme_score, grades, one_sitting, postutme_
     postutme_part = float(postutme_score) * 0.1
     return round(utme_part + olevel_part + postutme_part, 2)
 
-# ---------- Conversation steps ----------
-# step keys: mode, step, utme, grades(list), sitting(bool), postutme
+# ---------- Command and conversation handlers ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
@@ -113,7 +112,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Welcome. Choose an option to proceed:", reply_markup=reply_markup
+        "Welcome to Aggregate Calculator Bot. Choose an option to proceed:", reply_markup=reply_markup
     )
 
 async def mode_choice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,21 +133,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(text)
 
+# Developer info updated to Daniel and @Danzy_101
 async def developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👨‍💻 Developer: Daniel-\nTelegram: @Danzy_101")
+    await update.message.reply_text("👨‍💻 Developer: Daniel\nTelegram: @Danzy_101")
 
-async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data['mode'] = 'mode_utme_only'
-    context.user_data['step'] = 'ask_utme'
-    await update.message.reply_text("Enter your UTME score (0–400):")
-
-async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):    user = update.effective_user
+async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     ensure_user(user.id)
     bot_username = (await context.bot.get_me()).username
     link = f"https://t.me/{bot_username}?start=ref_{user.id}"
     await update.message.reply_text(
-        f"🔗 Invite your friends with this link:\n{link}\nDeveloped by Daniel (@Danzy_101)\nEarn 5 free calculations per referral!"
+        f"🔗 Share this link with friends:\n{link}\nDeveloped by Daniel (@Danzy_101)\nEarn 5 free calculations per successful referral!"
     )
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,12 +159,19 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     count = 0
     for uid in list(users.keys()):
         try:
-            await context.bot.send_message(chat_id=int(uid), text=f"📢 Message from Admin:\n{message}")
+            await context.bot.send_message(chat_id=int(uid), text=f"📢 Message from Daniel (@Danzy_101):\n{message}")
             count += 1
         except Exception as e:
             logger.warning("Failed to send to %s: %s", uid, e)
             continue
     await update.message.reply_text(f"Broadcast sent to {count} users.")
+
+# /calculate command to start the step-by-step flow
+async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data['mode'] = 'mode_utme_only'
+    context.user_data['step'] = 'ask_utme'
+    await update.message.reply_text("Enter your UTME score (0–400):")
 
 # ---------- Handler for step-by-step inputs ----------
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,12 +181,12 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = context.user_data.get('mode')
     step = context.user_data.get('step')
 
-    # If user explicitly asks /calculate start fresh
+    # If user explicitly asks /calculate start fresh (in case CommandHandler missed)
     if text.lower() == "/calculate":
         context.user_data.clear()
         context.user_data['mode'] = 'mode_utme_only'
         context.user_data['step'] = 'ask_utme'
-        await update.message.reply_text("Enter your UTME score (0-400):")
+        await update.message.reply_text("Enter your UTME score (0–400):")
         return
 
     if not step:
@@ -234,7 +236,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Enter your Post-UTME score (0-100):")
             return
         else:
-            # compute and return
+            # compute and return for UTME only
             utme = context.user_data['utme']
             grades = context.user_data['grades']
             one_sitting = context.user_data['sitting']
@@ -293,8 +295,8 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("developer", developer))
     app.add_handler(CommandHandler("refer", refer))
-    app.add_handler(CommandHandler("calculate", calculate_command))
     app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("calculate", calculate_command))
     app.add_handler(CallbackQueryHandler(mode_choice_handler, pattern="^mode_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
@@ -304,4 +306,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
