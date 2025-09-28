@@ -135,7 +135,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👨‍💻 Developer: Daniel\nTelegram: @Danzy_101")
+    await update.message.reply_text("👨‍💻 Developer: Daniel-\nTelegram: @Danzy_101")
 
 async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
