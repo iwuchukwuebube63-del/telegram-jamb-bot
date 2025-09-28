@@ -135,7 +135,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def developer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Developer: Ebube\nTelegram: @yourusername")
+    await update.message.reply_text("👨‍💻 Developer: Daniel\nTelegram: @Danzy_101")
 
 async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -143,13 +143,12 @@ async def calculate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['step'] = 'ask_utme'
     await update.message.reply_text("Enter your UTME score (0–400):")
 
-async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):    user = update.effective_user
     ensure_user(user.id)
     bot_username = (await context.bot.get_me()).username
     link = f"https://t.me/{bot_username}?start=ref_{user.id}"
     await update.message.reply_text(
-        f"Share this link with friends:\n{link}\nEach successful referral gives you 5 free calculations."
+        f"🔗 Invite your friends with this link:\n{link}\nDeveloped by Daniel (@Danzy_101)\nEarn 5 free calculations per referral!"
     )
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
