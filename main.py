@@ -492,7 +492,7 @@ def build_app():
 #Dummy keep-alive Flask server
 flaskapp = Flask("keepalive")
 
-@flask_app.route("/")
+@flaskapp.route("/")
 def home():
     return "Bot is running"
 
