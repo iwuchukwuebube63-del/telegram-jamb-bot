@@ -443,14 +443,14 @@ async def unizik_sitting_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
 #/balance command
-async def cmdbalance(update: Update, context: ContextTypes.DEFAULTTYPE):
+async def cmdbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await ensure_user(user.id, user.username)
     bal = await get_balance(user.id)
     await update.message.reply_text(f"Your balance: {bal} calculation(s).")
 
 #/history command
-async def cmdhistory(update: Update, context: ContextTypes.DEFAULTTYPE):
+async def cmdhistory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     rows = await get_history(user.id, limit=25)
     if not rows:
@@ -460,7 +460,7 @@ async def cmdhistory(update: Update, context: ContextTypes.DEFAULTTYPE):
     await update.message.reply_text("Recent transactions:\n" + "\n".join(lines))
 
 #/broadcast admin-only
-async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULTTYPE):
+async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     senderid = update.effectiveuser.id
     if ADMINID is None or senderid != ADMIN_ID:
         await update.message.reply_text("Unauthorized. This command is for the bot admin only.")
