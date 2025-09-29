@@ -449,7 +449,7 @@ async def cmdbalance(update: Update, context: ContextTypes.DEFAULTTYPE):
     bal = await get_balance(user.id)
     await update.message.reply_text(f"Your balance: {bal} calculation(s).")
 
-/history command
+#/history command
 async def cmdhistory(update: Update, context: ContextTypes.DEFAULTTYPE):
     user = update.effective_user
     rows = await get_history(user.id, limit=25)
@@ -459,7 +459,7 @@ async def cmdhistory(update: Update, context: ContextTypes.DEFAULTTYPE):
     lines = [f"{r[2]}: {'+' if r[0]>0 else ''}{r[0]} — {r[1]}" for r in rows]
     await update.message.reply_text("Recent transactions:\n" + "\n".join(lines))
 
-/broadcast admin-only
+#/broadcast admin-only
 async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULTTYPE):
     senderid = update.effectiveuser.id
     if ADMINID is None or senderid != ADMIN_ID:
