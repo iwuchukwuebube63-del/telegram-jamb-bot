@@ -49,20 +49,12 @@ logger = logging.getLogger(__name__)
 
 # --- University pages (3 pages) ---
 UNIV_PAGES: List[List[str]] = [
-    # Page 0
     ["UNILAG", "UNIBEN", "DELSU", "FUTO", "UNICAL", "UNIPORT", "UNIJOS", "UNILORIN"],
-    # Page 1
     ["UNN", "ABU", "UI", "OAU", "COVENANT", "FUTA", "BUK", "FUPRE"],
-    # Page 2
     ["LASU", "UNIOSUN", "AAUA", "UNIZIK", "PRIVATE1", "PRIVATE2", "POLY1", "COLLEGE1"],
 ]
 
 # --- Mapping of university -> method key ---
-# METHOD_1: JAMB + Post-UTME
-# METHOD_2: JAMB + Post-UTME + O'Level
-# METHOD_3: JAMB + O'Level only
-# METHOD_4: Screening only / no aggregate
-# UNIZIK: special UNIZIK screening flow
 METHOD_MAP = {
     "UNILAG": "METHOD_1", "UNIBEN": "METHOD_1", "DELSU": "METHOD_1", "FUTO": "METHOD_1",
     "UNICAL": "METHOD_1", "UNIPORT": "METHOD_1", "UNIJOS": "METHOD_1", "UNILORIN": "METHOD_1",
@@ -70,7 +62,6 @@ METHOD_MAP = {
     "COVENANT": "METHOD_2", "FUTA": "METHOD_2", "BUK": "METHOD_2", "FUPRE": "METHOD_2",
     "LASU": "METHOD_3", "UNIOSUN": "METHOD_3", "AAUA": "METHOD_3",
     "UNIZIK": "UNIZIK",
-    # defaults for others may be added/updated dynamically
 }
 
 # --- Database helpers ---
@@ -179,7 +170,6 @@ def calc_method_3(jamb: int, olevel_grades: List[str]) -> float:
     return (jamb / 8.0) + olevel_score
 
 def calc_unizik(jamb: int, grades4: List[str], one_sitting: bool) -> float:
-    # grade mapping as described earlier (A1=90,B2=80,...)
     gmap = {"A1": 90, "B2": 80, "B3": 70, "C4": 60, "C5": 55, "C6": 50}
     olevel_points = sum(gmap.get(g.upper(), 0) for g in grades4[:4])
     bonus = 10 if one_sitting else 0
@@ -192,7 +182,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await init_db()
     await ensure_user(user.id, user.username)
-    # handle referral token: /start ref_<id>
     args = context.args
     if args and args[0].startswith("ref_"):
         try:
@@ -203,7 +192,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ok = await set_referred(user.id, ref_id)
             if ok:
                 await add_points(ref_id, REF_BONUS, f"Referral bonus for referring {user.id}")
-                # notify referrer
                 try:
                     await context.bot.send_message(
                         chat_id=ref_id,
@@ -212,7 +200,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     logger.info("Unable to notify referrer %s", ref_id)
                 await update.message.reply_text("Thanks for starting with a referral link. Your referrer was rewarded.")
-    # show first page
     await update.message.reply_text("Welcome! Select your university category:", reply_markup=univ_page_keyboard(0))
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,7 +210,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         page = int(data.split("|", 1)[1])
         await query.edit_message_text("Choose your university:", reply_markup=univ_page_keyboard(page))
         return
-
     if data == "show_refer":
         user = update.effective_user
         me = await context.bot.get_me()
@@ -231,13 +217,11 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"Share this link to refer others:\n\n{ref_link}\n\nWhen someone starts the bot with that link, you get +{REF_BONUS} calculations."
         await query.edit_message_text(text)
         return
-
     if data == "show_balance":
         user_id = update.effective_user.id
         bal = await get_balance(user_id)
         await query.edit_message_text(f"Your balance: {bal} calculation(s).")
         return
-
     if data == "show_history":
         user_id = update.effective_user.id
         rows = await get_history(user_id, limit=25)
@@ -247,14 +231,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [f"{r[2]}: {'+' if r[0]>0 else ''}{r[0]} — {r[1]}" for r in rows]
         await query.edit_message_text("Recent transactions:\n" + "\n".join(lines))
         return
-
     if data.startswith("select_univ|"):
         uni = data.split("|", 1)[1]
         method = METHOD_MAP.get(uni, "METHOD_1")
         context.user_data.clear()
         context.user_data["selected_uni"] = uni
         context.user_data["selected_method"] = method
-        # Begin appropriate flow
         await query.edit_message_text(f"You selected {uni}. Proceeding...")
         if method == "METHOD_1":
             context.user_data["state"] = "M1_JAMB"
@@ -277,14 +259,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     text = (update.message.text or "").strip()
     state = context.user_data.get("state")
-
     def parse_int(s: str) -> Optional[int]:
         try:
             return int(s)
         except Exception:
             return None
 
-    # METHOD 1 flow
     if state == "M1_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -294,7 +274,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "M1_POST"
         await update.message.reply_text("Enter your Post-UTME score (0-100):")
         return
-
     if state == "M1_POST":
         post = parse_int(text)
         if post is None or not (0 <= post <= 100):
@@ -302,14 +281,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         jamb = context.user_data.get("jamb", 0)
         aggregate = calc_method_1(jamb, post)
-        # deduct cost
         await ensure_user(user_id, user.username)
         await add_points(user_id, -CALC_COST, f"Calculation used for {context.user_data.get('selected_uni')}")
         await update.message.reply_text(f"Aggregate: {aggregate:.2f}%\n-{CALC_COST} point deducted from your balance.")
         context.user_data.clear()
         return
 
-    # METHOD 2 flow
     if state == "M2_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -319,7 +296,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "M2_POST"
         await update.message.reply_text("Enter your Post-UTME score (0-100):")
         return
-
     if state == "M2_POST":
         post = parse_int(text)
         if post is None or not (0 <= post <= 100):
@@ -329,7 +305,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "M2_OLEVEL"
         await update.message.reply_text("Enter 5 O'Level grades separated by commas (e.g., A1,B2,B3,C4,C5):")
         return
-
     if state == "M2_OLEVEL":
         grades = [g.strip().upper() for g in text.split(",") if g.strip()]
         if len(grades) < 5:
@@ -344,7 +319,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         return
 
-    # METHOD 3 flow
     if state == "M3_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -354,7 +328,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "M3_OLEVEL"
         await update.message.reply_text("Enter 5 O'Level grades separated by commas (e.g., A1,B2,B3,C4,C5):")
         return
-
     if state == "M3_OLEVEL":
         grades = [g.strip().upper() for g in text.split(",") if g.strip()]
         if len(grades) < 5:
@@ -368,7 +341,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.clear()
         return
 
-    # UNIZIK flow: JAMB -> 4 O'Level -> one-sitting buttons
     if state == "UNIZIK_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -378,7 +350,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = "UNIZIK_OLEVEL"
         await update.message.reply_text("Enter grades for the 4 JAMB subjects separated by commas (e.g., A1,B3,C4,B2):")
         return
-
     if state == "UNIZIK_OLEVEL":
         grades = [g.strip().upper() for g in text.split(",") if g.strip()]
         if len(grades) != 4:
@@ -395,7 +366,6 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Were the 4 credits obtained in a single sitting?", reply_markup=keyboard)
         return
 
-    # fallback
     await update.message.reply_text("Send /start to begin or use the buttons shown.")
 
 async def unizik_sitting_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -441,12 +411,12 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"{r[2]}: {'+' if r[0]>0 else ''}{r[0]} — {r[1]}" for r in rows]
     await update.message.reply_text("Recent transactions:\n" + "\n".join(lines))
 
-# Admin helper: currently not exposed as command in this file
-# You can add commands to modify METHOD_MAP or balances if required.
+# --- Bot startup (synchronous run_polling) ---
+if __name__ == "__main__":
+    # initialize DB before starting bot
+    import asyncio
+    asyncio.run(init_db())
 
-# --- Bot startup ---
-async def main():
-    await init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -457,8 +427,20 @@ async def main():
     app.add_handler(CommandHandler("history", cmd_history))
 
     logger.info("Bot starting...")
-    await app.run_polling()
+    app.run_polling()
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+# Dummy keep-alive server for Render
+from flask import Flask
+from threading import Thread
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_server():
+    app.run(host='0.0.0.0', port=8080)
+
+# Start dummy server in background
+Thread(target=run_server).start()
