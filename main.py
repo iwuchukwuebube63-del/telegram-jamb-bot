@@ -510,8 +510,8 @@ def home():
 def run_flask():
     flaskapp.run(host="0.0.0.0", port=FLASKPORT)
 
-# Entry point 
-if name == "main":
+# Entry pointt
+if __name__ == "__main__":
     import asyncio
     # create/init database
     asyncio.run(init_db())
