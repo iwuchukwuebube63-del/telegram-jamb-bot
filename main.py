@@ -503,7 +503,7 @@ def build_app():
 
 flaskapp = Flask("keepalive")
 
-@flask_app.route("/")
+@flaskapp.route("/")
 def home():
     return "Bot is running"
 
