@@ -483,7 +483,7 @@ async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULTTYPE):
             failed += 1
     await update.message.reply_text(f"Broadcast complete. Sent: {sent}. Failed: {failed}.")
 
---- Bot startup (synchronous run_polling) ---
+# Bot startup (synchronous run_polling) 
 def build_app():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
