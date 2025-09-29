@@ -499,7 +499,8 @@ def build_app():
     app.addhandler(CommandHandler("broadcast", cmdbroadcast))
     return app
 
---- Dummy keep-alive Flask server ---
+# Dummy keep-alive Flask server
+
 flaskapp = Flask("keepalive")
 
 @flask_app.route("/")
