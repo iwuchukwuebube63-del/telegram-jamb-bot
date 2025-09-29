@@ -472,7 +472,7 @@ async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
     await update.message.reply_text(f"Broadcast complete. Sent: {sent}. Failed: {failed}.")
 
---- Build application ---
+#--- Build application ---
 def build_app():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -489,7 +489,7 @@ def build_app():
     app.addhandler(MessageHandler(filters.TEXT & ~filters.COMMAND, textrouter))
     return app
 
-Dummy keep-alive Flask server
+#Dummy keep-alive Flask server
 flaskapp = Flask("keepalive")
 
 @flask_app.route("/")
