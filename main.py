@@ -499,7 +499,7 @@ def home():
 def run_flask():
     flaskapp.run(host="0.0.0.0", port=FLASKPORT)
 
-if name == "main":
+if __name__ == "__main__":
     import asyncio
     asyncio.run(init_db())
     t = Thread(target=run_flask, daemon=True)
