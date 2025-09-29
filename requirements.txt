@@ -1,4 +1,4 @@
 python-telegram-bot>=20.0
 aiosqlite>=0.18
-httpx>=0.24
 Flask>=2.0
+httpx>=0.24

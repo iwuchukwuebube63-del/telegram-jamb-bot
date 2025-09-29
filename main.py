@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
-# main.py
-# Telegram bot with:
-# - Paged university selector (3 pages)
-# - Four aggregate methods + UNIZIK screening flow
-# - Referral system (start with ref_<id>), +5 points to referrer
-# - Balance and transaction history (SQLite)
-# - Calculation consumes 1 point (adjustable)
-#
-# Requirements:
-#   pip install python-telegram-bot aiosqlite
-#
-# Configure:
-#   export BOT_TOKEN="your_bot_token_here"
-#   (or set BOT_TOKEN in environment before running)
+# main.py - Telegram bot with referral, balances, history, broadcast, paged university selector
+# Added: /help, /calculate (start calc flow), new-user 10 free calculations,
+#        referral gives referrer +5, /developer, /refer
+# Requirements: python-telegram-bot>=20.0, aiosqlite, Flask, httpx
+# Set environment variables:
+#   BOT_TOKEN (required)
+#   ADMIN_ID  (optional, numeric)
+#   DB_PATH   (optional, default bot_data.sqlite)
+#   PORT      (optional, default 8080)
 #
 # Run:
 #   python main.py
 
 import os
 import logging
-import aiosqlite
+from threading import Thread
 from typing import List, Tuple, Optional
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+
+import aiosqlite
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -36,13 +30,21 @@ from telegram.ext import (
 )
 
 # --- Configuration ---
-BOT_TOKEN = os.environ.get("BOT_TOKEN", None)
-DB_PATH = os.environ.get("DB_PATH", "bot_data.sqlite")
-CALC_COST = 1          # points deducted per calculation
-REF_BONUS = 5          # points awarded per successful referral
-
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is required")
+
+ADMIN_ID_ENV = os.environ.get("ADMIN_ID")
+try:
+    ADMIN_ID = int(ADMIN_ID_ENV) if ADMIN_ID_ENV else None
+except Exception:
+    ADMIN_ID = None
+
+DB_PATH = os.environ.get("DB_PATH", "bot_data.sqlite")
+CALC_COST = int(os.environ.get("CALC_COST", "1"))   # points per calculation
+NEW_USER_BONUS = int(os.environ.get("NEW_USER_BONUS", "10"))  # points for new user
+REF_BONUS = int(os.environ.get("REF_BONUS", "5"))   # points per referral
+FLASK_PORT = int(os.environ.get("PORT", "8080"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -93,16 +95,23 @@ async def init_db():
         await db.commit()
 
 async def ensure_user(user_id: int, username: Optional[str]):
+    # ensures user exists; if newly created, give NEW_USER_BONUS points
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO users(user_id, username) VALUES (?, ?)",
-            (user_id, username or "")
-        )
-        await db.execute(
-            "INSERT OR IGNORE INTO balances(user_id, points) VALUES (?, 0)",
-            (user_id,)
-        )
-        await db.commit()
+        cur = await db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+        exists = await cur.fetchone()
+        if not exists:
+            await db.execute("INSERT INTO users(user_id, username, referred, referred_by) VALUES (?, ?, 0, NULL)",
+                             (user_id, username or ""))
+            await db.execute("INSERT OR IGNORE INTO balances(user_id, points) VALUES (?, 0)", (user_id,))
+            await db.execute("UPDATE balances SET points = points + ? WHERE user_id = ?", (NEW_USER_BONUS, user_id))
+            await db.execute("INSERT INTO tx(user_id, change, reason) VALUES (?, ?, ?)",
+                             (user_id, NEW_USER_BONUS, "New user bonus"))
+            await db.commit()
+        else:
+            # update username if changed
+            await db.execute("UPDATE users SET username = ? WHERE user_id = ?", (username or "", user_id))
+            await db.execute("INSERT OR IGNORE INTO balances(user_id, points) VALUES (?, 0)", (user_id,))
+            await db.commit()
 
 async def get_balance(user_id: int) -> int:
     async with aiosqlite.connect(DB_PATH) as db:
@@ -119,10 +128,8 @@ async def add_points(user_id: int, points: int, reason: str):
 
 async def get_history(user_id: int, limit: int = 25) -> List[Tuple[int, str, str]]:
     async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT change, reason, ts FROM tx WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, limit)
-        )
+        cur = await db.execute("SELECT change, reason, ts FROM tx WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                               (user_id, limit))
         rows = await cur.fetchall()
         return [(r[0], r[1], r[2]) for r in rows]
 
@@ -133,8 +140,18 @@ async def set_referred(new_user_id: int, referrer_id: int) -> bool:
         if row and row[0] == 1:
             return False
         await db.execute("UPDATE users SET referred_by = ?, referred = 1 WHERE user_id = ?", (referrer_id, new_user_id))
+        await db.execute("INSERT OR IGNORE INTO balances(user_id, points) VALUES (?, 0)", (referrer_id,))
+        await db.execute("UPDATE balances SET points = points + ? WHERE user_id = ?", (REF_BONUS, referrer_id))
+        await db.execute("INSERT INTO tx(user_id, change, reason) VALUES (?, ?, ?)",
+                         (referrer_id, REF_BONUS, f"Referral bonus for referring {new_user_id}"))
         await db.commit()
         return True
+
+async def fetch_all_user_ids() -> List[int]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM users")
+        rows = await cur.fetchall()
+        return [r[0] for r in rows]
 
 # --- UI helpers ---
 def univ_page_keyboard(page_index: int) -> InlineKeyboardMarkup:
@@ -182,6 +199,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await init_db()
     await ensure_user(user.id, user.username)
+    # referral handling: /start ref_<id>
     args = context.args
     if args and args[0].startswith("ref_"):
         try:
@@ -191,16 +209,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if ref_id and ref_id != user.id:
             ok = await set_referred(user.id, ref_id)
             if ok:
-                await add_points(ref_id, REF_BONUS, f"Referral bonus for referring {user.id}")
                 try:
-                    await context.bot.send_message(
-                        chat_id=ref_id,
-                        text=f"🎉 You referred @{user.username or user.id}! +{REF_BONUS} calculations added to your balance."
-                    )
+                    await context.bot.send_message(chat_id=ref_id,
+                                                   text=f"🎉 You referred @{user.username or user.id}! +{REF_BONUS} calculations added.")
                 except Exception:
                     logger.info("Unable to notify referrer %s", ref_id)
-                await update.message.reply_text("Thanks for starting with a referral link. Your referrer was rewarded.")
+                await update.message.reply_text("Thanks for using a referral link. Your referrer was rewarded.")
+    # show main menu (university page 0)
     await update.message.reply_text("Welcome! Select your university category:", reply_markup=univ_page_keyboard(0))
+
+# New command: /calculate - same flow as selecting a university from /start
+async def calculate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await init_db()
+    await ensure_user(user.id, user.username)
+    await update.message.reply_text("Start a new calculation. Select your university category:", reply_markup=univ_page_keyboard(0))
+
+# /refer command to show referral link
+async def refer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    me = await context.bot.get_me()
+    user = update.effective_user
+    ref_link = f"https://t.me/{me.username}?start=ref_{user.id}"
+    await update.message.reply_text(f"Share this link to refer others:\n\n{ref_link}\n\nEach successful referral gives the referrer +{REF_BONUS} calculations.")
+
+# /help command listing available commands
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "Available commands:\n"
+        "/start - Start and open university selector; accepts referral tokens\n"
+        "/calculate - Start a new calculation (same as selecting university)\n"
+        "/refer - Get your referral link\n"
+        "/balance - Show your calculation balance\n"
+        "/history - Show recent transactions\n"
+        "/help - Show this help text\n"
+        "/developer - Show developer info\n"
+        "/broadcast - Admin-only: send message to all users\n"
+    )
+    await update.message.reply_text(help_text)
+
+# /developer command: show author info
+async def developer_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Developer: Daniel\nTelegram: @Danzy_101")
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -214,7 +263,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         me = await context.bot.get_me()
         ref_link = f"https://t.me/{me.username}?start=ref_{user.id}"
-        text = f"Share this link to refer others:\n\n{ref_link}\n\nWhen someone starts the bot with that link, you get +{REF_BONUS} calculations."
+        text = f"Share this link to refer others:\n\n{ref_link}\n\nEach successful referral gives the referrer +{REF_BONUS} calculations."
         await query.edit_message_text(text)
         return
     if data == "show_balance":
@@ -259,12 +308,14 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     text = (update.message.text or "").strip()
     state = context.user_data.get("state")
+
     def parse_int(s: str) -> Optional[int]:
         try:
             return int(s)
         except Exception:
             return None
 
+    # METHOD 1
     if state == "M1_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -282,11 +333,13 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         jamb = context.user_data.get("jamb", 0)
         aggregate = calc_method_1(jamb, post)
         await ensure_user(user_id, user.username)
+        # deduct cost (allow negative balances if desired)
         await add_points(user_id, -CALC_COST, f"Calculation used for {context.user_data.get('selected_uni')}")
-        await update.message.reply_text(f"Aggregate: {aggregate:.2f}%\n-{CALC_COST} point deducted from your balance.")
+        await update.message.reply_text(f"Aggregate: {aggregate:.2f}\n-{CALC_COST} point deducted from your balance.")
         context.user_data.clear()
         return
 
+    # METHOD 2
     if state == "M2_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -315,10 +368,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         aggregate = calc_method_2(jamb, post, grades)
         await ensure_user(user_id, user.username)
         await add_points(user_id, -CALC_COST, f"Calculation used for {context.user_data.get('selected_uni')}")
-        await update.message.reply_text(f"Aggregate: {aggregate:.2f}%\n-{CALC_COST} point deducted from your balance.")
+        await update.message.reply_text(f"Aggregate: {aggregate:.2f}\n-{CALC_COST} point deducted from your balance.")
         context.user_data.clear()
         return
 
+    # METHOD 3
     if state == "M3_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -337,10 +391,11 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         aggregate = calc_method_3(jamb, grades)
         await ensure_user(user_id, user.username)
         await add_points(user_id, -CALC_COST, f"Calculation used for {context.user_data.get('selected_uni')}")
-        await update.message.reply_text(f"Aggregate: {aggregate:.2f}%\n-{CALC_COST} point deducted from your balance.")
+        await update.message.reply_text(f"Aggregate: {aggregate:.2f}\n-{CALC_COST} point deducted from your balance.")
         context.user_data.clear()
         return
 
+    # UNIZIK
     if state == "UNIZIK_JAMB":
         jamb = parse_int(text)
         if jamb is None or not (0 <= jamb <= 400):
@@ -357,16 +412,12 @@ async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["olevel_grades"] = grades
         context.user_data["state"] = "UNIZIK_SITTING"
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("Yes (one sitting)", callback_data="unizik_sit|yes"),
-                InlineKeyboardButton("No (multiple sittings)", callback_data="unizik_sit|no"),
-            ]
-        ])
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Yes (one sitting)", callback_data="unizik_sit|yes"),
+                                         InlineKeyboardButton("No (multiple sittings)", callback_data="unizik_sit|no")]])
         await update.message.reply_text("Were the 4 credits obtained in a single sitting?", reply_markup=keyboard)
         return
 
-    await update.message.reply_text("Send /start to begin or use the buttons shown.")
+    await update.message.reply_text("Send /start or /calculate to begin or use the buttons shown.")
 
 async def unizik_sitting_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -383,26 +434,23 @@ async def unizik_sitting_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_score = calc_unizik(jamb, grades4, one_sitting)
     user = update.effective_user
     await ensure_user(user.id, user.username)
-    await add_points(user.id, -CALC_COST, f"UNIZIK screening calc for {context.user_data.get('selected_uni')}")
-    await query.edit_message_text(
-        f"UNIZIK Screening Result\n"
-        f"JAMB: {jamb}\n"
-        f"O'Level raw points (4 subjects): {grades4}\n"
-        f"{'One sitting bonus applied' if one_sitting else 'No one-sitting bonus'}\n"
-        f"Final screening score: {final_score:.2f}\n"
+    await addpoints(user.id, -CALCCOST, f"UNIZIK screening calc for {context.userdata.get('selecteduni')}")
+    await query.editmessagetext(
+        f"UNIZIK Screening Result\nJAMB: {jamb}\nO'Level raw points (4 subjects): {grades4}\n"
+        f"{'One sitting bonus applied' if onesitting else 'No one-sitting bonus'}\nFinal screening score: {finalscore:.2f}\n"
         f"-{CALC_COST} point deducted from your balance."
     )
     context.user_data.clear()
 
-# /balance command
-async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+/balance command
+async def cmdbalance(update: Update, context: ContextTypes.DEFAULTTYPE):
     user = update.effective_user
     await ensure_user(user.id, user.username)
     bal = await get_balance(user.id)
     await update.message.reply_text(f"Your balance: {bal} calculation(s).")
 
-# /history command
-async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+/history command
+async def cmdhistory(update: Update, context: ContextTypes.DEFAULTTYPE):
     user = update.effective_user
     rows = await get_history(user.id, limit=25)
     if not rows:
@@ -411,36 +459,67 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [f"{r[2]}: {'+' if r[0]>0 else ''}{r[0]} — {r[1]}" for r in rows]
     await update.message.reply_text("Recent transactions:\n" + "\n".join(lines))
 
-# --- Bot startup (synchronous run_polling) ---
-if __name__ == "__main__":
-    # initialize DB before starting bot
-    import asyncio
-    asyncio.run(init_db())
+/broadcast admin-only
+async def cmdbroadcast(update: Update, context: ContextTypes.DEFAULTTYPE):
+    senderid = update.effectiveuser.id
+    if ADMINID is None or senderid != ADMIN_ID:
+        await update.message.reply_text("Unauthorized. This command is for the bot admin only.")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /broadcast Your message here")
+        return
+    text = " ".join(context.args)
+    userids = await fetchalluserids()
+    if not user_ids:
+        await update.message.reply_text("No users found in the database.")
+        return
+    sent = 0
+    failed = 0
+    for uid in user_ids:
+        try:
+            await context.bot.sendmessage(chatid=uid, text=text)
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(f"Broadcast complete. Sent: {sent}. Failed: {failed}.")
 
+--- Bot startup (synchronous run_polling) ---
+def build_app():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(callback_router, pattern=r"^(nav\||select_univ\||show_refer|show_balance|show_history)"))
-    app.add_handler(CallbackQueryHandler(unizik_sitting_cb, pattern=r"^unizik_sit\|"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
-    app.add_handler(CommandHandler("balance", cmd_balance))
-    app.add_handler(CommandHandler("history", cmd_history))
+    app.addhandler(CommandHandler("calculate", calculatecmd))
+    app.addhandler(CommandHandler("refer", refercmd))
+    app.addhandler(CommandHandler("help", helpcmd))
+    app.addhandler(CommandHandler("developer", developercmd))
+    app.addhandler(CallbackQueryHandler(callbackrouter, pattern=r"^(nav\||selectuniv\||showrefer|showbalance|showhistory)"))
+    app.addhandler(CallbackQueryHandler(uniziksittingcb, pattern=r"^uniziksit\|"))
+    app.addhandler(MessageHandler(filters.TEXT & ~filters.COMMAND, textrouter))
+    app.addhandler(CommandHandler("balance", cmdbalance))
+    app.addhandler(CommandHandler("history", cmdhistory))
+    app.addhandler(CommandHandler("broadcast", cmdbroadcast))
+    return app
 
-    logger.info("Bot starting...")
+--- Dummy keep-alive Flask server ---
+flaskapp = Flask("keepalive")
+
+@flask_app.route("/")
+def home():
+    return "Bot is running"
+
+def run_flask():
+    flaskapp.run(host="0.0.0.0", port=FLASKPORT)
+
+--- Entry point ---
+if name == "main":
+    import asyncio
+    # create/init database
+    asyncio.run(init_db())
+    # start Flask keep-alive server in background thread
+    t = Thread(target=run_flask, daemon=True)
+    t.start()
+    logger.info("Started keep-alive server on port %s", FLASK_PORT)
+    # build and run Telegram app (blocking)
+    app = build_app()
+    logger.info("Bot starting (run_polling)...")
     app.run_polling()
 
-# Dummy keep-alive server for Render
-from flask import Flask
-from threading import Thread
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot is running!"
-
-def run_server():
-    app.run(host='0.0.0.0', port=8080)
-
-# Start dummy server in background
-Thread(target=run_server).start()

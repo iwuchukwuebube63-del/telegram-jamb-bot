@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.sqlite
+bot_data.sqlite
+.env
+.vscode/
+.venv/
