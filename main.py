@@ -442,7 +442,7 @@ async def unizik_sitting_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     context.user_data.clear()
 
-/balance command
+#/balance command
 async def cmdbalance(update: Update, context: ContextTypes.DEFAULTTYPE):
     user = update.effective_user
     await ensure_user(user.id, user.username)
